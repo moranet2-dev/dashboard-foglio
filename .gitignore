@@ -1,0 +1,13 @@
+# .gitignore
+
+# Ignora la cartella dei segreti di Streamlit (che contiene secrets.toml)
+.streamlit/
+
+# Ignora i file di database e credenziali locali
+users.db
+credentials.json
+genera_hash.py
+
+# Ignora le cartelle di ambiente e cache di Python
+venv/
+__pycache__/
