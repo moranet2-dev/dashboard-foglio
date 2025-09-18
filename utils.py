@@ -5,6 +5,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import numpy as np
 import json
+import yfinance as yf
 
 # NOTA: Rimuoviamo tutte le funzioni legate a sqlite3 perché ora usiamo st.secrets
 
@@ -107,3 +108,48 @@ def clean_ticker_for_yf(ticker_series: pd.Series) -> pd.Series:
             if suffix: return f"{symbol}{suffix}"
         return ticker
     return ticker_series.apply(convert_ticker)
+
+# --- NUOVA FUNZIONE CENTRALIZZATA PER IL CALCOLO STORICO DEL VALORE ---
+@st.cache_data(ttl=3600)
+def calculate_historical_portfolio_value(transactions_df: pd.DataFrame):
+    """
+    Calcola il valore storico giornaliero di un portafoglio di transazioni.
+    Usa yfinance per scaricare i prezzi storici.
+    Restituisce una Serie pandas con date come indice e valore come dato.
+    """
+    if transactions_df.empty:
+        return pd.Series()
+
+    df_copy = transactions_df.copy()
+    df_copy['yf_ticker'] = clean_ticker_for_yf(df_copy['Ticker'])
+    
+    yf_tickers = df_copy['yf_ticker'].unique().tolist()
+    start_date = df_copy['Data Acquisto'].min()
+    
+    try:
+        # Scarica i dati dei prezzi di chiusura
+        prices_df = yf.download(yf_tickers, start=start_date, progress=False)['Close']
+        if prices_df.empty:
+            return pd.Series()
+        # Se c'è un solo ticker, yf.download restituisce una Series, la trasformiamo in DataFrame
+        if isinstance(prices_df, pd.Series):
+            prices_df = prices_df.to_frame(name=yf_tickers[0])
+    except Exception:
+        return pd.Series()
+
+    # Gestisce i dati mancanti riempiendo con l'ultimo valore valido
+    prices_df.ffill(inplace=True)
+    
+    # Crea un DataFrame per le quote possedute giorno per giorno
+    holdings_df = pd.DataFrame(0.0, index=prices_df.index, columns=prices_df.columns)
+    
+    for _, row in df_copy.iterrows():
+        # Per ogni transazione, incrementa il numero di quote dal giorno dell'acquisto in poi
+        if row['yf_ticker'] in holdings_df.columns:
+            holdings_df.loc[row['Data Acquisto']:, row['yf_ticker']] += row['n. share']
+    
+    # Calcola il valore giornaliero del portafoglio (quote * prezzo)
+    portfolio_daily_value = (holdings_df * prices_df).sum(axis=1)
+    
+    # Rimuovi i giorni iniziali in cui il valore era zero
+    return portfolio_daily_value[portfolio_daily_value > 0]

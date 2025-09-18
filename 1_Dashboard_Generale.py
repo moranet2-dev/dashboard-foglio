@@ -117,16 +117,53 @@ def main():
                 st.plotly_chart(fig_bar, use_container_width=True)
             
             st.header("Andamento Cumulativo del Portafoglio Filtrato")
+            # --- NUOVA LOGICA DI CALCOLO PER IL GRAFICO ---
             if not df_filtrato_tipo.empty:
-                df_cumulative_base = df_filtrato_tipo[df_filtrato_tipo['Data Acquisto'].dt.date <= end_date].sort_values('Data Acquisto')
-                df_cumulative_base['Costo Cumulativo Totale'] = df_cumulative_base['Cost Base'].cumsum()
-                df_cumulative_base['Valore Cumulativo Approssimato'] = df_cumulative_base['Valore Titoli Real'].cumsum()
-                fig_cumulative = go.Figure()
-                fig_cumulative.add_trace(go.Scatter(x=df_cumulative_base['Data Acquisto'], y=df_cumulative_base['Costo Cumulativo Totale'], mode='lines', name='Costo Totale Cumulativo', line=dict(color='red', dash='dot', shape='spline')))
-                fig_cumulative.add_trace(go.Scatter(x=df_cumulative_base['Data Acquisto'], y=df_cumulative_base['Valore Cumulativo Approssimato'], mode='lines', name='Valore Totale Cumulativo (Approssimato)', line=dict(color='green', shape='spline'), fill='tonexty', fillcolor='rgba(0,255,0,0.2)'))
-                fig_cumulative.update_layout(title="Andamento del Costo vs. Valore Attuale", yaxis_title="Valore (€)", legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
-                fig_cumulative.update_xaxes(range=[start_date, end_date])
-                st.plotly_chart(fig_cumulative, use_container_width=True)
+                
+                # 1. Calcola il costo cumulativo (questa logica è corretta e rimane)
+                df_costo = df_filtrato_tipo.sort_values('Data Acquisto')
+                df_costo['Costo Cumulativo'] = df_costo['Cost Base'].cumsum()
+
+                # 2. Calcola il valore storico REALE usando la nuova funzione
+                with st.spinner("Calcolo del valore storico del portafoglio..."):
+                    historical_value = utils.calculate_historical_portfolio_value(df_filtrato_tipo)
+
+                if not historical_value.empty:
+                    fig_cumulative = go.Figure()
+
+                    # Aggiungi la traccia del COSTO (linea a gradini/tratteggiata)
+                    fig_cumulative.add_trace(go.Scatter(
+                        x=df_costo['Data Acquisto'], 
+                        y=df_costo['Costo Cumulativo'],
+                        mode='lines', 
+                        name='Costo Totale Cumulativo',
+                        line=dict(color='red', dash='dot', shape='hv'), # 'hv' per gradini
+                        fill=None
+                    ))
+                    
+                    # Aggiungi la traccia del VALORE REALE (linea continua e area)
+                    fig_cumulative.add_trace(go.Scatter(
+                        x=historical_value.index, 
+                        y=historical_value.values,
+                        mode='lines', 
+                        name='Valore Reale del Portafoglio',
+                        line=dict(color='green', shape='spline'),
+                        fill='tozeroy', 
+                        fillcolor='rgba(0,255,0,0.1)'
+                    ))
+
+                    fig_cumulative.update_layout(
+                        title="Andamento del Costo vs. Valore Reale Storico",
+                        yaxis_title="Valore (€)",
+                        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+                    )
+                    # Applica lo zoom temporale selezionato dall'utente
+                    fig_cumulative.update_xaxes(range=[start_date, end_date])
+                    
+                    st.plotly_chart(fig_cumulative, use_container_width=True)
+                else:
+                    st.warning("Impossibile calcolare il valore storico del portafoglio. Potrebbe esserci un problema con i dati dei ticker da Yahoo Finance.")
+                        
 
     # --- SEZIONE 3: GESTIONE STATI DI LOGIN NON RIUSCITI ---
     elif authentication_status == False:
