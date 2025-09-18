@@ -9,22 +9,27 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Dashboard Portafoglio", layout="wide")
 
-# --- SEZIONE 1: CONFIGURAZIONE AUTENTICAZIONE DA st.secrets ---
-# Questo blocco legge la configurazione degli utenti che hai inserito
-# nel file secrets.toml (o nella sezione Secrets di Streamlit Cloud).
+# --- SEZIONE 1: CONFIGURAZIONE AUTENTICAZIONE DA st.secrets (MODIFICATA) ---
 try:
-    users = st.secrets.database.users
+    # La lettura da st.secrets ora è più diretta
+    users_config = st.secrets["database"]["users"]
+    
     credentials = {
         "usernames": {
+            # Iteriamo sulla configurazione degli utenti
             username: {
-                "name": user_details.name,
-                "password": user_details.password_hash
-            } for username, user_details in users.items()
+                "name": user_details["name"],
+                "password": user_details["password_hash"]
+            } for username, user_details in users_config.items()
         }
     }
-except (AttributeError, KeyError):
-    st.error("Configurazione degli utenti non trovata o malformata in st.secrets.")
-    st.info("Assicurati di aver configurato correttamente il file .streamlit/secrets.toml con le sezioni [database.users] e [google_credentials].")
+
+    if not credentials["usernames"]:
+         raise ValueError("Nessun utente trovato nella configurazione dei secrets.")
+
+except (AttributeError, KeyError, ValueError) as e:
+    st.error(f"Configurazione degli utenti non trovata o malformata in st.secrets: {e}")
+    st.info("Assicurati di aver configurato correttamente i Secrets in Streamlit Cloud.")
     st.stop()
 
 # Inizializza l'oggetto authenticator
