@@ -7,31 +7,47 @@ import numpy as np
 import json
 import yfinance as yf
 
-# NOTA: Rimuoviamo tutte le funzioni legate a sqlite3 perché ora usiamo st.secrets
+# --- FUNZIONE DI CONNESSIONE RIUTILIZZABILE (CORRETTA) ---
+# Questa funzione ora è di nuovo disponibile per essere chiamata da qualsiasi pagina.
+def get_gspread_client_for_user(user_creds):
+    """
+    Crea un client gspread usando le credenziali specifiche di un utente (passate come dizionario).
+    """
 
+    scope = [
+        "https://spreadsheets.google.com/feeds", 
+        'https://www.googleapis.com/auth/spreadsheets',
+        "https://www.googleapis.com/auth/drive.file", 
+        "https://www.googleapis.com/auth/drive"
+    ]
+    try:
+        # Assicura che le credenziali siano un dizionario
+        if not isinstance(user_creds, dict):
+            user_creds = dict(user_creds)
+            
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(user_creds, scope)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        st.error(f"Errore nella validazione delle credenziali Google: {e}")
+        return None
+
+# --- FUNZIONE DI CARICAMENTO DATI AGGIORNATA ---
 @st.cache_data(ttl=600)
 def load_and_clean_data(username: str):
     """
-    Carica e pulisce i dati per l'utente specificato, leggendo la configurazione da st.secrets.
+    Carica e pulisce i dati per l'utente specificato.
     """
     try:
-        # --- SEZIONE 1: RECUPERO CONFIGURAZIONE UTENTE DA st.secrets ---
-        # Accede alla configurazione dell'utente basandosi sul suo username
+        # Recupera la configurazione dell'utente da st.secrets
         user_config = st.secrets.database.users[username]
         user_creds = st.secrets.google_credentials[username]
-        
         google_sheet_name = user_config.sheet_name
         
-        # --- SEZIONE 2: CONNESSIONE A GOOGLE SHEETS ---
-        # Crea il client gspread usando le credenziali specifiche dell'utente
-        scope = [
-            "https://spreadsheets.google.com/feeds", 
-            'https://www.googleapis.com/auth/spreadsheets',
-            "https://www.googleapis.com/auth/drive.file", 
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(user_creds), scope)
-        client = gspread.authorize(creds)
+        # USA LA NUOVA FUNZIONE DI UTILITÀ
+        client = get_gspread_client_for_user(user_creds)
+        if client is None: return pd.DataFrame()
+
         sheet = client.open(google_sheet_name).worksheet("Holding")
         
         # --- SEZIONE 3: LETTURA E COSTRUZIONE DEL DATAFRAME ---
@@ -153,3 +169,16 @@ def calculate_historical_portfolio_value(transactions_df: pd.DataFrame):
     
     # Rimuovi i giorni iniziali in cui il valore era zero
     return portfolio_daily_value[portfolio_daily_value > 0]
+
+def valida_e_converti_numero(testo_numero):
+    """
+    Tenta di convertire una stringa in un numero float, gestendo virgole e punti.
+    Restituisce None se la conversione fallisce.
+    """
+    if not isinstance(testo_numero, str) or not testo_numero.strip():
+        return None
+    try:
+        # Sostituisce la virgola con il punto per la conversione standard in float
+        return float(testo_numero.strip().replace(',', '.'))
+    except (ValueError, TypeError):
+        return None
