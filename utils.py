@@ -162,72 +162,70 @@ def carica_configurazione_da_foglio(username: str):
 
 @st.cache_data(ttl=600)
 def load_cash_flow_data(username: str, config: dict):
-    if not config: return {}, []
-    try:
-        user_config = st.secrets.database.users[username]
-        user_creds = st.secrets.google_credentials[username]
-        google_sheet_name = user_config.sheet_name
-        client = get_gspread_client_for_user(user_creds)
-        if client is None: return {}, []
+    """
+    Carica i dati dal foglio 'IN/OUT' con stampe di debug dettagliate.
+    """
+    with st.expander("🔍 Debug: Caricamento Dati da Foglio 'IN/OUT'"):
+        try:
+            st.write("--- **Inizio `load_cash_flow_data`** ---")
+            if not config:
+                st.error("Configurazione non fornita. Arresto.")
+                return {}, []
 
-        sheet_in_out = client.open(google_sheet_name).worksheet("IN/OUT")
-        all_values = sheet_in_out.get_all_values()
-        df_raw = pd.DataFrame(all_values)
-        
-        colonna_b_raw = df_raw.iloc[:, 1]
-        header_row_matches = colonna_b_raw[colonna_b_raw.str.strip() == 'Macro ENTRATE']
-        if header_row_matches.empty: return {}, []
-        
-        header_row_index = header_row_matches.index[0]
-        header_row_values = df_raw.iloc[header_row_index].tolist()
-        
-        master_headers_mesi = [h for h in header_row_values if isinstance(h, str) and '/' in h]
-        header_to_col_index = {h: i for i, h in enumerate(header_row_values) if h in master_headers_mesi}
-        
-        tables = {}
-        
-        def extract_specific_rows(df, categories_to_find, index_col_name='Categoria'):
-            rows = []
-            for cat in categories_to_find:
-                row_data = df[df.iloc[:, 1].str.strip() == cat]
-                if not row_data.empty:
-                    data = {mese: row_data.iloc[0, idx] for mese, idx in header_to_col_index.items()}
-                    data[index_col_name] = cat
-                    rows.append(data)
-            if not rows: return pd.DataFrame()
-            return pd.DataFrame(rows).set_index(index_col_name)
-
-        tables['total_entrate'] = extract_specific_rows(df_raw, ['TOTALE ENTRATE'], 'Totale').iloc[0]
-        tables['total_uscite'] = extract_specific_rows(df_raw, ['TOTALE USCITE'], 'Totale').iloc[0]
-        tables['macro_uscite'] = extract_specific_rows(df_raw, config['Macro USCITE'])
-        tables['micro_uscite'] = extract_specific_rows(df_raw, config['Micro USCITE'])
-        tables['micro_entrate'] = extract_specific_rows(df_raw, config['Micro ENTRATE'])
-        
-        def clean_df_or_series(data):
-            if data.empty:
-                return data
-            def to_numeric_cleaned(series):
-                return pd.to_numeric(
-                    series.astype(str)
-                    .str.replace('€', '', regex=False)
-                    .str.replace('.', '', regex=False)
-                    .str.replace(',', '.', regex=False)
-                    .str.strip(),
-                    errors='coerce'
-                ).fillna(0)
-            if isinstance(data, pd.Series):
-                return to_numeric_cleaned(data)
-            else:
-                return data.apply(to_numeric_cleaned)
+            # 1. CARICAMENTO GREZZO E CONFIGURAZIONE
+            user_config = st.secrets.database.users[username]
+            user_creds = st.secrets.google_credentials[username]
+            google_sheet_name = user_config.sheet_name
             
-        for name, data in tables.items():
-            tables[name] = clean_df_or_series(data)
+            client = get_gspread_client_for_user(user_creds)
+            if client is None: 
+                st.error("Connessione a Google fallita.")
+                return {}, []
 
-        available_years = sorted(list({int(m.split('/')[1]) for m in master_headers_mesi}), reverse=True)
-        return tables, available_years
-    except Exception as e:
-        st.error(f"Errore caricamento da 'IN/OUT': {e}"); return {}, []
+            st.write(f"✅ Connesso a Google. Apro il foglio: **{google_sheet_name}**")
+            
+            sheet_in_out = client.open(google_sheet_name).worksheet("IN/OUT")
+            all_values = sheet_in_out.get_all_values()
+            df_raw = pd.DataFrame(all_values)
+
+            st.write("✅ Foglio 'IN/OUT' letto. **DataFrame grezzo (prime 25 righe):**")
+            st.dataframe(df_raw.head(25))
+
+            # 2. RICERCA DINAMICA DELL'HEADER MASTER
+            st.write("Cerco 'Macro ENTRATE' nella colonna B (indice 1)...")
+            colonna_b_raw = df_raw.iloc[:, 1]
+            header_row_matches = colonna_b_raw[colonna_b_raw.str.strip() == 'Macro ENTRATE']
+            
+            st.write(f"Risultati trovati per 'Macro ENTRATE': `{len(header_row_matches)}`")
+
+            if header_row_matches.empty:
+                st.error("ERRORE CRITICO: Non sono riuscito a trovare la riga con l'intestazione 'Macro ENTRATE' nella colonna B. Controlla che sia scritta esattamente così nel foglio 'IN/OUT'.")
+                return {}, []
+            
+            header_row_index = header_row_matches.index[0]
+            st.write(f"✅ Trovata intestazione master alla riga con indice: `{header_row_index}`")
+            
+            # ... (il resto della funzione rimane invariato ma è dentro il try/except per sicurezza)
+            header_row_values = df_raw.iloc[header_row_index].tolist()
+            master_headers_mesi = [h for h in header_row_values if isinstance(h, str) and '/' in h]
+            header_to_col_index = {h: i for i, h in enumerate(header_row_values) if h in master_headers_mesi}
+            
+            tables = {}
+        
+
+        except IndexError:
+             st.error("ERRORE: `single positional indexer is out-of-bounds`. Questo di solito significa che una riga chiave (come 'Macro ENTRATE') non è stata trovata, quindi il DataFrame dei risultati è vuoto.")
+             st.info("Controlla lo screenshot del DataFrame grezzo qui sopra e verifica che le etichette nella colonna B siano identiche a quelle del foglio di configurazione e al foglio originale.")
+             st.dataframe(colonna_b_raw.to_frame(name="Colonna B Analizzata"))
+             return {}, []
+        except Exception as e:
+            st.error(f"Errore grave durante il caricamento da 'IN/OUT': {e}")
+            st.exception(e)
+            return {}, []
     
+    # Questo return è fuori dal blocco `with`, ma dentro la funzione
+    return tables, available_years # Assumendo che tables e available_years siano definite prima dell'except
+        
 
 def trova_prossima_riga_vuota_cash_flow(sheet, tipo_sezione):
     # ...
