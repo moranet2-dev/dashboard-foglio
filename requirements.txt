@@ -3,7 +3,6 @@ streamlit==1.35.0
 streamlit-authenticator==0.3.2
 bcrypt
 pandas
-streamlit-extras
 gspread
 oauth2client
 plotly

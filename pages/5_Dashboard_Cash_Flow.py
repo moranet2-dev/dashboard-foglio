@@ -6,7 +6,6 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import utils 
 import time
-from streamlit_extras.stylable_container import stylable_container
 import plotly.express as px
 
 
@@ -120,8 +119,8 @@ with st.expander("Inserisci una nuova operazione"):
                 importo_uscita_str = st.text_input("Importo", "0,00", key="i_uscita")
                 macro_uscita = st.selectbox("Macro", config["Macro USCITE"], key="ma_uscita")
                 micro_uscita = st.selectbox("Micro", config["Micro USCITE"], key="mi_uscita")
-            with stylable_container(key="green_button_container", css_styles=".btn-uscita {}"):
                 submitted_uscita = st.form_submit_button("Aggiungi Uscita", use_container_width=True, type="primary")
+            
             if submitted_uscita:
                 importo = utils.valida_e_converti_numero(importo_uscita_str)
                 if importo and importo > 0:
@@ -145,8 +144,8 @@ with st.expander("Inserisci una nuova operazione"):
                 importo_entrata_str = st.text_input("Importo", "0,00", key="i_entrata")
                 macro_entrata = st.selectbox("Macro", config["Macro ENTRATE"], key="ma_entrata")
                 micro_entrata = st.selectbox("Micro", config["Micro ENTRATE"], key="mi_entrata")
-            with stylable_container(key="red_button_container", css_styles=".btn-entrata {}"):
                 submitted_entrata = st.form_submit_button("Aggiungi Entrata", use_container_width=True, type="primary")
+            
             if submitted_entrata:
                 importo = utils.valida_e_converti_numero(importo_entrata_str)
                 if importo and importo > 0:
