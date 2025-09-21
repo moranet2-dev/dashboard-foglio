@@ -161,31 +161,48 @@ def carica_configurazione_da_foglio(username: str):
         st.error(f"Errore caricamento da 'appconfig': {e}"); return None, None
 
 @st.cache_data(ttl=600)
-def load_cash_flow_data(username: str, config: dict):
-    """
-    Carica i dati dal foglio 'IN/OUT' in modo robusto, gestendo
-    eventuali sezioni o righe mancanti.
-    """
-    # Inizializza i valori di ritorno in caso di fallimento
-    empty_return = ({}, [])
-    
+def carica_configurazione_da_foglio(username: str):
+    # (Questa funzione è corretta, non va toccata)
     try:
         user_config = st.secrets.database.users[username]
         user_creds = st.secrets.google_credentials[username]
         google_sheet_name = user_config.sheet_name
+        client = get_gspread_client_for_user(dict(user_creds))
+        if client is None: return None, None
         
+        config_sheet = client.open(google_sheet_name).worksheet("appconfig")
+        df_config = pd.DataFrame(config_sheet.get_all_records())
+        
+        micro_uscite_cols = [col for col in df_config.columns if 'Micro USCITE' in col]
+        micro_uscite_list = df_config[micro_uscite_cols].unstack().dropna().unique().tolist()
+        
+        config = {
+            "Conto": df_config["Conto"].dropna().tolist(), "Tipo": df_config["Tipo"].dropna().tolist(),
+            "Macro ENTRATE": df_config["Macro ENTRATE"].dropna().tolist(), "Micro ENTRATE": sorted(df_config["Micro ENTRATE"].dropna().unique().tolist()),
+            "Macro USCITE": df_config["Macro USCITE"].dropna().tolist(), "Micro USCITE": sorted(micro_uscite_list)
+        }
+        return config, df_config
+    except Exception as e:
+        st.error(f"Errore caricamento da 'appconfig': {e}"); return None, None
+
+@st.cache_data(ttl=600)
+def load_cash_flow_data(username: str, config: dict):
+    """Legge il foglio 'IN/OUT' e restituisce dati puliti."""
+    if not config: return {}, []
+    try:
+        user_config = st.secrets.database.users[username]
+        user_creds = st.secrets.google_credentials[username]
+        google_sheet_name = user_config.sheet_name
         client = get_gspread_client_for_user(user_creds)
-        if client is None: return empty_return
+        if client is None: return {}, []
 
         sheet_in_out = client.open(google_sheet_name).worksheet("IN/OUT")
         all_values = sheet_in_out.get_all_values()
         df_raw = pd.DataFrame(all_values)
         
-        if not config: return empty_return
-        
         colonna_b_raw = df_raw.iloc[:, 1]
         header_row_matches = colonna_b_raw[colonna_b_raw.str.strip() == 'Macro ENTRATE']
-        if header_row_matches.empty: return empty_return
+        if header_row_matches.empty: return {}, []
         
         header_row_index = header_row_matches.index[0]
         header_row_values = df_raw.iloc[header_row_index].tolist()
@@ -196,38 +213,46 @@ def load_cash_flow_data(username: str, config: dict):
         tables = {}
         
         def extract_specific_rows(df, categories_to_find, index_col_name='Categoria'):
-            # ... (questa funzione interna è già abbastanza robusta)
-            pass
+            rows = []
+            for cat in categories_to_find:
+                row_data = df[df.iloc[:, 1].str.strip() == cat]
+                if not row_data.empty:
+                    data = {mese: row_data.iloc[0, idx] for mese, idx in header_to_col_index.items()}
+                    data[index_col_name] = cat
+                    rows.append(data)
+            if not rows: return pd.DataFrame()
+            return pd.DataFrame(rows).set_index(index_col_name)
 
-        # --- MODIFICA CHIAVE: Estrazione sicura ---
-        # Estrai i totali solo se esistono, altrimenti crea una Series vuota
+        # --- MODIFICA CHIAVE QUI: CONTROLLO ANTI-CRASH ---
         df_tot_entrate = extract_specific_rows(df_raw, ['TOTALE ENTRATE'], 'Totale')
         tables['total_entrate'] = df_tot_entrate.iloc[0] if not df_tot_entrate.empty else pd.Series(dtype=object)
-
+        
         df_tot_uscite = extract_specific_rows(df_raw, ['TOTALE USCITE'], 'Totale')
         tables['total_uscite'] = df_tot_uscite.iloc[0] if not df_tot_uscite.empty else pd.Series(dtype=object)
-
-        # Estrai dettagli
-        tables['macro_uscite'] = extract_specific_rows(df_raw, config.get('Macro USCITE', []))
-        tables['micro_uscite'] = extract_specific_rows(df_raw, config.get('Micro USCITE', []))
-        tables['micro_entrate'] = extract_specific_rows(df_raw, config.get('Micro ENTRATE', []))
+        
+        tables['macro_uscite'] = extract_specific_rows(df_raw, config['Macro USCITE'])
+        tables['micro_uscite'] = extract_specific_rows(df_raw, config['Micro USCITE'])
+        tables['micro_entrate'] = extract_specific_rows(df_raw, config['Micro ENTRATE'])
         
         def clean_df_or_series(data):
-            # ... (funzione di pulizia)
-            pass
+            if data.empty: return data
+            def to_numeric_cleaned(series):
+                return pd.to_numeric(
+                    series.astype(str).str.replace('€', '', regex=False).str.replace('.', '', regex=False)
+                    .str.replace(',', '.', regex=False).str.strip(),
+                    errors='coerce').fillna(0)
+            if isinstance(data, pd.Series):
+                return to_numeric_cleaned(data)
+            else:
+                return data.apply(to_numeric_cleaned)
             
         for name, data in tables.items():
             tables[name] = clean_df_or_series(data)
 
         available_years = sorted(list({int(m.split('/')[1]) for m in master_headers_mesi}), reverse=True)
-        
-        # Se tutto va bene, restituisce i dati
         return tables, available_years
-
     except Exception as e:
-        # Se qualsiasi errore si verifica, restituisce un risultato vuoto e pulito
-        st.error(f"Errore grave durante il caricamento da 'IN/OUT': {e}")
-        return empty_return
+        st.error(f"Errore caricamento da 'IN/OUT': {e}"); return {}, []
 
 def trova_prossima_riga_vuota_cash_flow(sheet, tipo_sezione):
     # ...
