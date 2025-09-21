@@ -134,35 +134,10 @@ def calculate_historical_portfolio_value(transactions_df: pd.DataFrame):
     return portfolio_daily_value[portfolio_daily_value > 0]
 
 # --- FUNZIONI SPECIFICHE PER IL CASH FLOW ---
-
 @st.cache_data(ttl=600)
 def carica_configurazione_da_foglio(username: str):
-    """Legge SOLO il foglio 'appconfig' e restituisce config e df_config."""
-    try:
-        user_config = st.secrets.database.users[username]
-        user_creds = st.secrets.google_credentials[username]
-        google_sheet_name = user_config.sheet_name
-        client = get_gspread_client_for_user(dict(user_creds))
-        if client is None: raise Exception("Impossibile creare il client GSpread.")
-        
-        config_sheet = client.open(google_sheet_name).worksheet("appconfig")
-        df_config = pd.DataFrame(config_sheet.get_all_records())
-        
-        micro_uscite_cols = [col for col in df_config.columns if 'Micro USCITE' in col]
-        micro_uscite_list = df_config[micro_uscite_cols].unstack().dropna().unique().tolist()
-        
-        config = {
-            "Conto": df_config["Conto"].dropna().tolist(), "Tipo": df_config["Tipo"].dropna().tolist(),
-            "Macro ENTRATE": df_config["Macro ENTRATE"].dropna().tolist(), "Micro ENTRATE": sorted(df_config["Micro ENTRATE"].dropna().unique().tolist()),
-            "Macro USCITE": df_config["Macro USCITE"].dropna().tolist(), "Micro USCITE": sorted(micro_uscite_list)
-        }
-        return config, df_config
-    except Exception as e:
-        st.error(f"Errore caricamento da 'appconfig': {e}"); return None, None
-
-@st.cache_data(ttl=600)
-def carica_configurazione_da_foglio(username: str):
-    # (Questa funzione è corretta, non va toccata)
+#   Legge il foglio 'appconfig' e restituisce config e df_config.
+#   Ora include anche la sequenza per l'inserimento guidato.
     try:
         user_config = st.secrets.database.users[username]
         user_creds = st.secrets.google_credentials[username]
@@ -173,18 +148,27 @@ def carica_configurazione_da_foglio(username: str):
         config_sheet = client.open(google_sheet_name).worksheet("appconfig")
         df_config = pd.DataFrame(config_sheet.get_all_records())
         
+        # --- MODIFICA CHIAVE: Pulizia delle liste da valori vuoti ---
+        def clean_list(series):
+            # Rimuove valori NA/None, converte in stringa, rimuove spazi e filtra stringhe vuote
+            return [item for item in series.dropna().astype(str).str.strip().tolist() if item]
+
         micro_uscite_cols = [col for col in df_config.columns if 'Micro USCITE' in col]
         micro_uscite_list = df_config[micro_uscite_cols].unstack().dropna().unique().tolist()
         
         config = {
-            "Conto": df_config["Conto"].dropna().tolist(), "Tipo": df_config["Tipo"].dropna().tolist(),
-            "Macro ENTRATE": df_config["Macro ENTRATE"].dropna().tolist(), "Micro ENTRATE": sorted(df_config["Micro ENTRATE"].dropna().unique().tolist()),
-            "Macro USCITE": df_config["Macro USCITE"].dropna().tolist(), "Micro USCITE": sorted(micro_uscite_list)
+            "Conto": clean_list(df_config["Conto"]),
+            "Tipo": clean_list(df_config["Tipo"]),
+            "Macro ENTRATE": clean_list(df_config["Macro ENTRATE"]),
+            "Micro ENTRATE": sorted(clean_list(df_config["Micro ENTRATE"])),
+            "Macro USCITE": clean_list(df_config["Macro USCITE"]),
+            "Micro USCITE": sorted([item for item in micro_uscite_list if isinstance(item, str) and item.strip()]),
+            "Sequenza Guidata": clean_list(df_config["Sequenza Guidata"])
         }
         return config, df_config
     except Exception as e:
         st.error(f"Errore caricamento da 'appconfig': {e}"); return None, None
-
+        
 @st.cache_data(ttl=600)
 def load_cash_flow_data(username: str, config: dict):
     """Legge il foglio 'IN/OUT' e restituisce dati puliti."""
@@ -254,6 +238,91 @@ def load_cash_flow_data(username: str, config: dict):
     except Exception as e:
         st.error(f"Errore caricamento da 'IN/OUT': {e}"); return {}, []
 
+# --- NUOVA FUNZIONE PER LEGGERE IL FOGLIO 'Storico' ---
+@st.cache_data(ttl=600)
+def load_historical_totals(username: str):
+    """
+    Legge il foglio 'Storico' con stampe di debug dettagliate.
+    """
+    with st.expander("🔍 Debug: Caricamento Dati da Foglio 'Storico'"):
+        try:
+            st.write("--- **Inizio `load_historical_totals`** ---")
+            
+            user_config = st.secrets.database.users[username]
+            user_creds = st.secrets.google_credentials[username]
+            google_sheet_name = user_config.sheet_name
+            
+            client = get_gspread_client_for_user(user_creds)
+            if client is None: 
+                st.error("Debug: Connessione a Google fallita.")
+                return pd.Series(dtype=float), pd.Series(dtype=float)
+
+            st.write(f"✅ Connesso. Apro il foglio: **{google_sheet_name}**, worksheet: **Storico**")
+
+            sheet = client.open(google_sheet_name).worksheet("Storico")
+            all_values = sheet.get_all_values()
+            df_raw = pd.DataFrame(all_values)
+
+            st.write("✅ Foglio 'Storico' letto. **DataFrame grezzo (prime 20 righe):**")
+
+            st.dataframe(df_raw.head(20))
+
+            # DEBUG: Ispezioniamo la colonna B (indice 1)
+            colonna_b_raw = df_raw.iloc[:, 1]
+            st.write("**Contenuto della Colonna B (indice 1) dove cerco le parole chiave:**")
+            st.dataframe(colonna_b_raw.str.strip().to_frame(name="Valori in Colonna B (puliti)"))
+
+            # 1. Trova l'header dei mesi
+            st.write("Cerco la parola 'STORICO'...")
+            header_row_matches = colonna_b_raw[colonna_b_raw.str.strip() == 'STORICO']
+            st.write(f"Risultati trovati per 'STORICO': `{len(header_row_matches)}`")
+            if header_row_matches.empty:
+                st.error("ERRORE CRITICO: Non ho trovato la parola 'STORICO' nella colonna B.")
+                return pd.Series(dtype=float), pd.Series(dtype=float)
+            header_row_index = header_row_matches.index[0]
+            
+            st.write(f"✅ Trovato 'STORICO' all'indice di riga: `{header_row_index}`")
+
+            header_row_values = df_raw.iloc[header_row_index].tolist()
+            master_headers_mesi = [h for h in header_row_values if isinstance(h, str) and '/' in h]
+            header_to_col_index = {h: i for i, h in enumerate(header_row_values) if h in master_headers_mesi}
+            st.write("✅ Header mesi identificati:", master_headers_mesi)
+            
+            # 2. Estrai le righe 'Entrate' e 'Uscite'
+            def extract_row_data(anchor_text):
+                st.write(f"Cerco la parola '{anchor_text}'...")
+                row_matches = df_raw[df_raw.iloc[:, 1].str.strip() == anchor_text]
+                st.write(f"Risultati trovati per '{anchor_text}': `{len(row_matches)}`")
+                if row_matches.empty:
+                    st.warning(f"Non ho trovato la riga '{anchor_text}' nella colonna B.")
+                    return pd.Series(dtype=object)
+                
+                row = row_matches.iloc[0].tolist()
+                data = {mese: row[idx] for mese, idx in header_to_col_index.items()}
+                return pd.Series(data)
+
+            entrate_storico_raw = extract_row_data("Entrate")
+            uscite_storico_raw = extract_row_data("Uscite")
+
+            st.write("✅ Dati grezzi estratti per Entrate e Uscite.")
+
+            def clean_series(series):
+                return pd.to_numeric(
+                    series.astype(str).str.replace('€', '', regex=False).str.replace('.', '', regex=False)
+                    .str.replace(',', '.', regex=False).str.strip(),
+                    errors='coerce').fillna(0)
+
+            st.success("✅ Funzione `load_historical_totals` completata con successo.")
+            return clean_series(entrate_storico_raw), clean_series(uscite_storico_raw)
+
+        except Exception as e:
+            st.error(f"❌ Errore grave durante l'esecuzione di `load_historical_totals`: {e}")
+            st.exception(e)
+            return pd.Series(dtype=float), pd.Series(dtype=float)
+
+
+
+#
 def trova_prossima_riga_vuota_cash_flow(sheet, tipo_sezione):
     # ...
     pass

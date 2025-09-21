@@ -8,32 +8,57 @@ import utils
 import time
 import plotly.express as px
 
-
 st.set_page_config(page_title="Dashboard Cash Flow", layout="wide")
+st.title("Dashboard Cash Flow")
 
 # --- LOGICA DI CARICAMENTO DATI ---
 utils.check_data_loaded()
 username = st.session_state.get('current_user')
 
-# Carica sia la configurazione che i dati del cash flow
+# Carica tutte le fonti di dati
 config, df_config = utils.carica_configurazione_da_foglio(username)
-cash_flow_data, available_years = utils.load_cash_flow_data(username, config)
+cash_flow_data_raw, _ = utils.load_cash_flow_data(username, config)
+totals_entrate_storico_raw, totals_uscite_storico_raw = utils.load_historical_totals(username)
 
-if not config or not cash_flow_data or not available_years:
-    st.warning("Errore nel caricamento dei dati o della configurazione.")
-    st.stop()
+if not config or not cash_flow_data_raw:
+    st.warning("Errore nel caricamento dei dati o della configurazione."); st.stop()
+
+# --- LOGICA DI ALLINEAMENTO DATI ---
+# 1. Trova l'orizzonte temporale completo
+mesi_da_dettaglio = cash_flow_data_raw.get('total_entrate', pd.Series(dtype=float)).index
+mesi_da_storico = totals_entrate_storico_raw.index
+tutti_i_mesi_unici = sorted(list(set(mesi_da_dettaglio) | set(mesi_da_storico)))
+
+MAPPA_MESI_ITA_NUM = {'GEN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAG': 5, 'GIU': 6, 'LUG': 7, 'AGO': 8, 'SET': 9, 'OTT': 10, 'NOV': 11, 'DIC': 12}
+tutti_i_mesi_disponibili = sorted(
+    [m for m in tutti_i_mesi_unici if isinstance(m, str) and '/' in m],
+    key=lambda m: (int(m.split('/')[1]), MAPPA_MESI_ITA_NUM.get(m.split('/')[0].strip(), 0))
+)
+available_years = sorted(list({int(m.split('/')[1]) for m in tutti_i_mesi_disponibili}), reverse=True)
+
+# 2. Allinea tutti i dati a questo orizzonte temporale
+cash_flow_data = {
+    key: data.reindex(tutti_i_mesi_disponibili, fill_value=0)
+    for key, data in cash_flow_data_raw.items()
+}
+totals_entrate_storico = totals_entrate_storico_raw.reindex(tutti_i_mesi_disponibili, fill_value=0)
+totals_uscite_storico = totals_uscite_storico_raw.reindex(tutti_i_mesi_disponibili, fill_value=0)
 
 # ==============================================================================
 # SEZIONE FILTRI (SPOSTATA NELLA SIDEBAR)
 # ==============================================================================
 st.sidebar.header("Filtri di Visualizzazione")
+mesi_da_dettaglio = cash_flow_data.get('total_entrate', pd.Series(dtype=float)).index
+mesi_da_storico = totals_entrate_storico.index
+tutti_i_mesi_unici = sorted(list(set(mesi_da_dettaglio) | set(mesi_da_storico)))
 
-s_total_entrate = cash_flow_data.get('total_entrate', pd.Series(dtype=float))
+
 MAPPA_MESI_ITA_NUM = {'GEN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAG': 5, 'GIU': 6, 'LUG': 7, 'AGO': 8, 'SET': 9, 'OTT': 10, 'NOV': 11, 'DIC': 12}
 tutti_i_mesi_disponibili = sorted(
-    [col for col in s_total_entrate.index if isinstance(col, str) and '/' in col],
-    key=lambda m: (int(m.split('/')[1]), MAPPA_MESI_ITA_NUM.get(m.split('/')[0].strip(), 0))
-)
+    [m for m in tutti_i_mesi_unici if isinstance(m, str) and '/' in m],
+    key=lambda m: (int(m.split('/')[1]), MAPPA_MESI_ITA_NUM.get(m.split('/')[0].strip(), 0)))
+available_years = sorted(list({int(m.split('/')[1]) for m in tutti_i_mesi_disponibili}), reverse=True)
+
 
 if not tutti_i_mesi_disponibili:
     st.info("Nessun dato mensile trovato per generare l'analisi.")
@@ -97,7 +122,6 @@ else:
 
     colonne_da_usare = st.session_state.mesi_selezionati
 
-
 # ==============================================================================
 # SEZIONE 1: INTERFACCIA UTENTE
 # ==============================================================================
@@ -158,109 +182,78 @@ with st.expander("Inserisci una nuova operazione"):
                 else: st.error("Importo non valido.")
 
 # ==============================================================================
-# SEZIONE 2: FILTRO AVANZATO CON LOGICA DIPENDENTE
+# SEZIONE 2 E 3: KPI E GRAFICI (CON SINTASSI CORRETTA)
 # ==============================================================================
+st.markdown("---")
+st.header("Analisi Finanziaria")
 
 if not colonne_da_usare:
     st.warning("Seleziona almeno un mese dalla sidebar per visualizzare i dati.")
 else:
-    # --- MODIFICA CHIAVE: CREAZIONE DEL TITOLO DINAMICO ---
-    periodo_selezionato_str = vista_selezionata
-    if vista_selezionata == "Selezione Personalizzata":
-        # Se la selezione è personalizzata, mostra il range di date
-        colonne_ordinate = sorted(colonne_da_usare, key=lambda m: (int(m.split('/')[1]), MAPPA_MESI_ITA_NUM.get(m.split('/')[0].strip(), 0)))
-        if len(colonne_ordinate) > 1:
-            periodo_selezionato_str = f"da {colonne_ordinate[0]} a {colonne_ordinate[-1]}"
-        elif len(colonne_ordinate) == 1:
-            periodo_selezionato_str = colonne_ordinate[0]
-        else:
-            periodo_selezionato_str = "Nessun periodo"
+    # --- LOGICA DI CONFRONTO E KPI (ORA ROBUSTA) ---
+    total_entrate_dettaglio = cash_flow_data['total_entrate'][colonne_da_usare].sum()
+    total_uscite_dettaglio = cash_flow_data['total_uscite'][colonne_da_usare].sum()
     
-    st.success(f"Dati visualizzati per: **{periodo_selezionato_str}**")
+    total_entrate_storico = totals_entrate_storico[colonne_da_usare].sum()
+    total_uscite_storico = totals_uscite_storico[colonne_da_usare].sum()
     
-    # Calcolo KPI
-    s_total_uscite = cash_flow_data.get('total_uscite', pd.Series(dtype=float))
-    total_entrate = s_total_entrate.get(colonne_da_usare, 0).sum()
-    total_uscite = s_total_uscite.get(colonne_da_usare, 0).sum()
-    risparmio_netto = total_entrate - total_uscite
-    tasso_risparmio = (risparmio_netto / total_entrate * 100) if total_entrate > 0 else 0
+    total_entrate_finale = max(total_entrate_dettaglio, total_entrate_storico)
+    total_uscite_finale = max(total_uscite_dettaglio, total_uscite_storico)
+    
+    # Warning
+    diff_uscite = total_uscite_storico - total_uscite_dettaglio
+    if diff_uscite > 0.01:
+        st.warning(f"Attenzione: € {diff_uscite:,.2f} di uscite non sono categorizzate. I grafici mostrano solo la parte categorizzata.")
+    
+    # Calcolo e Visualizzazione KPI
+    risparmio_netto = total_entrate_finale - total_uscite_finale
+    tasso_risparmio = (risparmio_netto / total_entrate_finale * 100) if total_entrate_finale > 0 else 0
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric(label="Entrate Totali", value=f"€ {total_entrate:,.2f}")
-    kpi2.metric(label="Uscite Totali", value=f"€ {total_uscite:,.2f}")
-    kpi3.metric(label="Risparmio Netto", value=f"€ {risparmio_netto:,.2f}")
-    kpi4.metric(label="Tasso di Risparmio", value=f"{tasso_risparmio:.1f}%")
+    kpi1.metric("Entrate Totali", f"€ {total_entrate_finale:,.2f}")
+    kpi2.metric("Uscite Totali", f"€ {total_uscite_finale:,.2f}")
+    kpi3.metric("Risparmio Netto", f"€ {risparmio_netto:,.2f}")
+    kpi4.metric("Tasso di Risparmio", f"{tasso_risparmio:.1f}%")
 
-#==============================================================================
-# SEZIONE 3: VISUALIZZAZIONI GRAFICHE (CON AGGIUNTA MICRO)
-# ==============================================================================
-st.markdown("---")
-st.header("Analisi Uscite ({periodo_selezionato_str})")
-
-df_macro_uscite_raw = cash_flow_data.get('macro_uscite', pd.DataFrame())
-df_micro_uscite_raw = cash_flow_data.get('micro_uscite', pd.DataFrame())
-
-df_macro_uscite = df_macro_uscite_raw.loc[(df_macro_uscite_raw.sum(axis=1) != 0)]
-df_micro_uscite = df_micro_uscite_raw.loc[(df_micro_uscite_raw.sum(axis=1) != 0)]
-
-if 'colonne_da_usare' in locals() and colonne_da_usare:
+    # --- VISUALIZZAZIONI GRAFICHE ---
+    st.markdown("---")
+    st.header("Dettaglio Categorie del Periodo")
     
-    # --- ANALISI USCITE ---
-    st.subheader("Analisi Uscite del Periodo")
-    
-    df_macro_uscite = cash_flow_data.get('macro_uscite', pd.DataFrame()).loc[lambda df: df.sum(axis=1) != 0]
-    df_micro_uscite = cash_flow_data.get('micro_uscite', pd.DataFrame()).loc[lambda df: df.sum(axis=1) != 0]
+    df_macro_uscite = cash_flow_data.get('macro_uscite', pd.DataFrame())
+    df_micro_uscite = cash_flow_data.get('micro_uscite', pd.DataFrame())
+    df_micro_entrate = cash_flow_data.get('micro_entrate', pd.DataFrame())
 
-    if df_macro_uscite.empty:
-        st.info("Nessuna uscita registrata nel periodo selezionato.")
-    else:
-        somma_macro_uscite = df_macro_uscite[colonne_da_usare].sum(axis=1).sort_values(ascending=False)
-        somma_micro_uscite = df_micro_uscite[colonne_da_usare].sum(axis=1).sort_values(ascending=False)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
+    # --- FINESTRA DI DEBUG ---
+    with st.expander("🔍 Debug: Dati allineati usati per i calcoli"):
+        st.write("**`colonne_da_usare` (mesi selezionati):**", colonne_da_usare)
+        st.write("**Dati `total_uscite_dettaglio` (allineati):**")
+        st.dataframe(cash_flow_data['total_uscite'])
+        st.write("**Dati `totals_uscite_storico` (allineati):**")
+        st.dataframe(totals_uscite_storico)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Analisi Uscite")
+        somma_macro_uscite = df_macro_uscite[colonne_da_usare].sum(axis=1)
+        somma_macro_uscite = somma_macro_uscite[somma_macro_uscite > 0]
+        if not somma_macro_uscite.empty:
             fig_pie_macro = px.pie(
-                values=somma_macro_uscite.values,
-                names=somma_macro_uscite.index,
-                title='Composizione Uscite (Macro)',
-                hole=0.4
+                values=somma_macro_uscite.values, names=somma_macro_uscite.index,
+                title='Composizione Uscite (Macro)', hole=0.4
             )
             st.plotly_chart(fig_pie_macro, use_container_width=True)
-
-        with col2:
-            fig_bar_micro = px.bar(
-                somma_micro_uscite.sort_values(ascending=True),
-                x=somma_micro_uscite.sort_values(ascending=True).values,
-                y=somma_micro_uscite.sort_values(ascending=True).index,
-                orientation='h',
-                title='Top Voci di Spesa (Micro)'
+        else:
+            st.info("Nessuna uscita categorizzata nel periodo selezionato.")
+    
+    with col2:
+        st.subheader("Analisi Entrate")
+        somma_micro_entrate = df_micro_entrate[colonne_da_usare].sum(axis=1)
+        somma_micro_entrate = somma_micro_entrate[somma_micro_entrate > 0]
+        if not somma_micro_entrate.empty:
+            fig_bar_entrate = px.bar(
+                somma_micro_entrate.sort_values(ascending=True),
+                orientation='h', title='Composizione Entrate (Micro)',
+                color_discrete_sequence=['#28a745']
             )
-            st.plotly_chart(fig_bar_micro, use_container_width=True)
-
-    st.markdown("---")
-    
-    # --- ANALISI ENTRATE ---
-    st.subheader("Analisi Entrate del Periodo")
-    
-    # Nota: Per le entrate non abbiamo la distinzione Macro/Micro, usiamo le categorie disponibili
-    df_micro_entrate = cash_flow_data.get('micro_entrate', pd.DataFrame()).loc[lambda df: df.sum(axis=1) != 0]
-
-    if df_micro_entrate.empty:
-        st.info("Nessuna entrata registrata nel periodo selezionato.")
-    else:
-        somma_micro_entrate = df_micro_entrate[colonne_da_usare].sum(axis=1).sort_values(ascending=False)
-        
-        # Per le entrate, usiamo un unico grafico a barre orizzontali
-        st.write("**Dettaglio Entrate per Categoria**")
-        fig_bar_entrate = px.bar(
-            somma_micro_entrate.sort_values(ascending=True),
-            x=somma_micro_entrate.sort_values(ascending=True).values,
-            y=somma_micro_entrate.sort_values(ascending=True).index,
-            orientation='h',
-            title='Composizione Entrate',
-            color_discrete_sequence=['#28a745'] # Colore verde
-        )
-        st.plotly_chart(fig_bar_entrate, use_container_width=True)
-
-else:
-    st.info("Seleziona un periodo per visualizzare le analisi.")
+            st.plotly_chart(fig_bar_entrate, use_container_width=True)
+        else:
+            st.info("Nessuna entrata categorizzata nel periodo selezionato.")
