@@ -6,6 +6,7 @@ import utils
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import time 
 
 # Configurazione della pagina all'inizio
 st.set_page_config(page_title="Dashboard Portafoglio", layout="wide")
@@ -58,6 +59,14 @@ def main():
         # Interfaccia utente post-login
         authenticator.logout('Logout', 'sidebar')
         st.sidebar.title(f"Benvenuto {name}")
+
+        if st.sidebar.button("🔄 Aggiorna Dati", use_container_width=True):
+            st.cache_data.clear()
+            st.success("Cache dei dati svuotata. I dati verranno ricaricati.")
+            # st.rerun() è implicito dopo un'azione su un bottone, ma a volte
+            # è bene essere espliciti se si vuole forzare il ricaricamento immediato.
+            time.sleep(1) # Dà tempo all'utente di leggere il messaggio
+            st.rerun()
 
         # Caricamento dati specifico per l'utente loggato
         if 'df' not in st.session_state or st.session_state.get('current_user') != username:
