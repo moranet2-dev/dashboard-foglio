@@ -67,20 +67,28 @@ def mostra_riepilogo_corrente(titolo="Riepilogo Sessione Corrente"):
         st.dataframe(df_recap_display[['Ticker', 'Categoria', 'Quote', 'Prezzo']], use_container_width=True, hide_index=True)
 
 def mostra_storico_sessioni(df_principale):
-    st.subheader("Storico Ultime Sessioni Guidate")
-    with st.expander("Apri/Chiudi Storico"):
-        storico_df = df_principale[df_principale['Categoria'].isin(['Stocks', 'Azione', 'Bond'])]
-        if not storico_df.empty:
-            ultime_date_uniche = sorted(storico_df['Data Acquisto'].dt.date.unique(), reverse=True)[:3]
-            if ultime_date_uniche:
-                for data in ultime_date_uniche:
-                    with st.expander(f"Dettaglio operazioni del {data.strftime('%d/%m/%Y')}"):
-                        ops_giorno = storico_df[storico_df['Data Acquisto'].dt.date == data]
-                        st.dataframe(ops_giorno[['Ticker', 'n. share', 'Cost Base']], hide_index=True)
-            else:
-                st.info("Nessuna sessione guidata precedente trovata.")
+    """Mostra lo storico delle ultime 3 sessioni guidate."""
+    st.subheader("Storico Ultime 3 Sessioni Guidate")
+    
+    # Rimuoviamo l'expander esterno
+    storico_df = df_principale[df_principale['Categoria'].isin(['Stocks', 'Azione', 'Bond'])]
+    if not storico_df.empty:
+        ultime_date_uniche = sorted(storico_df['Data Acquisto'].dt.date.unique(), reverse=True)[:3]
+        if ultime_date_uniche:
+            # Per ogni data, crea un expander separato (questo è permesso)
+            for data in ultime_date_uniche:
+                with st.expander(f"Dettaglio operazioni del {data.strftime('%d/%m/%Y')}"):
+                    ops_giorno = storico_df[storico_df['Data Acquisto'].dt.date == data]
+                    st.dataframe(
+                        ops_giorno[['Ticker', 'n. share', 'Cost Base']], 
+                        hide_index=True, 
+                        use_container_width=True
+                    )
         else:
             st.info("Nessuna sessione guidata precedente trovata.")
+    else:
+        st.info("Nessuna sessione guidata precedente trovata.")
+
 
 # --- LOGICA DI CONTROLLO E CARICAMENTO ---
 utils.check_data_loaded()
